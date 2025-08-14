@@ -4,31 +4,74 @@ import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import fetch from 'node-fetch';
 
+// ==== Config ====
+const PORT = process.env.PORT || 8080;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY; // set in Render env
+if (!OPENAI_API_KEY) {
+  console.error('Missing OPENAI_API_KEY');
+  process.exit(1);
+}
+
+// Only allow your frontend + localhost for dev
+const allowedOrigins = [
+  'https://chat.lunabotai.com',
+  'http://localhost:3000',
+  'http://127.0.0.1:3000'
+];
+const corsOptions = {
+  origin: (origin, cb) => {
+    if (!origin || allowedOrigins.includes(origin)) cb(null, true);
+    else cb(new Error(`CORS blocked for origin: ${origin}`));
+  }
+};
+
 const app = express();
-app.use(cors({ origin: [/localhost:\d+$/, /.*/] }));
+app.use(cors(corsOptions));
 app.use(express.json({ limit: '1mb' }));
 app.use(rateLimit({ windowMs: 60_000, max: 60 }));
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const PORT = process.env.PORT || 8080;
+// Helper to extract plain text from OpenAI Responses API JSON
+function extractText(data) {
+  if (!data) return '';
+  if (typeof data.output_text === 'string') return data.output_text;
+  if (Array.isArray(data.output)) {
+    const parts = [];
+    for (const item of data.output) {
+      if (item.type === 'output_text' && Array.isArray(item.text)) {
+        for (const t of item.text) {
+          if (typeof t.content === 'string') parts.push(t.content);
+        }
+      }
+    }
+    if (parts.length) return parts.join('');
+  }
+  if (data.choices?.[0]?.message?.content) return data.choices[0].message.content;
+  return '';
+}
 
-// Health endpoint
-app.get('/health', (_req, res) => res.json({ ok: true }));
+// ==== Routes ====
 
-// Chat endpoint that calls your stored prompt
+// Health check
+app.get('/health', (req, res) => {
+  res.json({ ok: true, service: 'lunabotai-backend', time: new Date().toISOString() });
+});
+
+// Chat endpoint
 app.post('/api/chat', async (req, res) => {
   try {
     const body = {
       prompt: {
-        id: "pmpt_689d3bb4f90081949d3d7dfe65db68640545dc8e25fec9f7",
-        version: "2"
-      }
+        id: 'pmpt_689d3bb4f90081949d3d7dfe65db68640545dc8e25fec9f7',
+        version: '2'
+      },
+      // Optional: include user message if provided
+      ...(Array.isArray(req.body?.messages) ? { input: req.body.messages } : {})
     };
 
     const r = await fetch('https://api.openai.com/v1/responses', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(body)
@@ -36,18 +79,20 @@ app.post('/api/chat', async (req, res) => {
 
     if (!r.ok) {
       const errTxt = await r.text().catch(() => '');
-      return res.status(r.status).json({ error: errTxt || 'OpenAI API error' });
+      return res.status(r.status || 502).json({ error: errTxt || 'OpenAI API error' });
     }
 
     const data = await r.json();
-    res.json(data);
+    const text = extractText(data) || '[No text returned]';
 
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: String(err?.message || err) });
+    res.json({ text });
+  } catch (e) {
+    console.error('Error in /api/chat:', e);
+    res.status(500).json({ error: String(e?.message || e) });
   }
 });
 
+// ==== Start server ====
 app.listen(PORT, () => {
-  console.log(`LunaBot AI backend running on http://localhost:${PORT}`);
+  console.log(`LunaBot AI backend listening on port ${PORT}`);
 });
