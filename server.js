@@ -6,9 +6,9 @@ import fetch from 'node-fetch';
 
 // ==== Config ====
 const PORT = process.env.PORT || 8080;
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY; // set in Render env
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 if (!OPENAI_API_KEY) {
-  console.error('Missing OPENAI_API_KEY');
+  console.error('❌ Missing OPENAI_API_KEY in environment variables.');
   process.exit(1);
 }
 
@@ -53,19 +53,15 @@ function extractText(data) {
 
 // Health check
 app.get('/health', (req, res) => {
-  res.json({ ok: true, service: 'lunabotai-backend', time: new Date().toISOString() });
+  res.json({ ok: true, service: 'lunabotai-backend', model: 'gpt-5', time: new Date().toISOString() });
 });
 
 // Chat endpoint
 app.post('/api/chat', async (req, res) => {
   try {
     const body = {
-      prompt: {
-        id: 'pmpt_689d3bb4f90081949d3d7dfe65db68640545dc8e25fec9f7',
-        version: '2'
-      },
-      // Optional: include user message if provided
-      ...(Array.isArray(req.body?.messages) ? { input: req.body.messages } : {})
+      model: 'gpt-5', // ✅ Always use GPT-5
+      input: Array.isArray(req.body?.messages) ? req.body.messages : [{ role: 'user', content: 'Hello!' }]
     };
 
     const r = await fetch('https://api.openai.com/v1/responses', {
@@ -79,20 +75,27 @@ app.post('/api/chat', async (req, res) => {
 
     if (!r.ok) {
       const errTxt = await r.text().catch(() => '');
+      console.error('❌ OpenAI API Error:', errTxt);
       return res.status(r.status || 502).json({ error: errTxt || 'OpenAI API error' });
     }
 
     const data = await r.json();
-    const text = extractText(data) || '[No text returned]';
+    console.log('✅ OpenAI API Response:', JSON.stringify(data, null, 2));
+
+    const text = extractText(data);
+    if (!text) {
+      return res.status(502).json({ error: 'No text returned from GPT-5' });
+    }
 
     res.json({ text });
   } catch (e) {
-    console.error('Error in /api/chat:', e);
+    console.error('❌ Server Error in /api/chat:', e);
     res.status(500).json({ error: String(e?.message || e) });
   }
 });
 
 // ==== Start server ====
 app.listen(PORT, () => {
-  console.log(`LunaBot AI backend listening on port ${PORT}`);
+  console.log(`🚀 LunaBot AI backend (GPT-5) listening on port ${PORT}`);
 });
+
